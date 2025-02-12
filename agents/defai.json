@@ -15,9 +15,7 @@
        "This is an example tweet.",
        "This is another example tweet."
      ],
-     "example_accounts": [
-       "0xzerebro"
-     ],
+     "example_accounts": [],
      "loop_delay": 900,
      "config": [
        {
