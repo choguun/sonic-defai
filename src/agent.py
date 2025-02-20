@@ -3,6 +3,7 @@ import random
 import time
 import logging
 import os
+import requests
 from pathlib import Path
 from dotenv import load_dotenv
 from src.connection_manager import ConnectionManager
@@ -156,6 +157,60 @@ class ZerePyAgent:
             task_weights = self._adjust_weights_for_time(current_hour, task_weights)
         
         return random.choices(self.tasks, weights=task_weights, k=1)[0]
+    
+    def heuristic_action_selection(self, use_time_based_weights: bool = False) -> dict:
+        task_weights = [weight for weight in self.task_weights.copy()]
+        
+        if use_time_based_weights:
+            current_hour = datetime.now().hour
+            task_weights = self._adjust_weights_for_time(current_hour, task_weights)
+
+        return random.choices(self.tasks, weights=task_weights, k=1)[0]
+
+    def fetch_shadow_pool_data(self) -> dict:
+        """Fetch pool data from Shadow API"""
+        try:
+            response = requests.get('https://api.shadow.so/mixed-pairs')
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logger.error(f"Failed to fetch Shadow pool data. Status code: {response.status_code}")
+                return None
+        except Exception as e:
+            logger.error(f"Error fetching Shadow pool data: {e}")
+            return None
+        
+    def calculate_apy(self, json_data: dict) -> float:
+        # Calculate APR and APY for each pair using the given formulas
+        for pair in json_data["pairs"]:
+            fees_per_day = pair.get("feesPerDay", 0)
+            tvl = pair.get("tvl", 1)  # Use 1 as a fallback to avoid division by zero
+            daily_yield = fees_per_day / tvl
+
+            # Calculate APR (as a percentage)
+            apr = daily_yield * 365 * 100
+
+            # Calculate APY (compounded daily, as a percentage)
+            apy = ((1 + daily_yield) ** 365 - 1) * 100
+
+            # Store the calculated APR and APY in the pair dictionary
+            pair["calculated_apr"] = apr
+            pair["calculated_apy"] = apy
+
+        # To sort by highest APR:
+        sorted_by_apr = sorted(json_data["pairs"], key=lambda x: x["calculated_apr"], reverse=True)
+
+        # To sort by highest APY:
+        sorted_by_apy = sorted(json_data["pairs"], key=lambda x: x["calculated_apy"], reverse=True)
+
+        # Display the results
+        print("Sorted by APR:")
+        for pair in sorted_by_apr:
+            print(f"Pair ID: {pair['id']} - Calculated APR: {pair['calculated_apr']:.2f}%")
+
+        print("\nSorted by APY:")
+        for pair in sorted_by_apy:
+            print(f"Pair ID: {pair['id']} - Calculated APY: {pair['calculated_apy']:.2f}%")
 
     def loop(self):
         """Main agent loop for autonomous behavior"""
@@ -177,16 +232,12 @@ class ZerePyAgent:
                 success = False
                 try:
                     # REPLENISH INPUTS
-                    # TODO: Add more inputs to complexify agent behavior
-                    if "timeline_tweets" not in self.state or self.state["timeline_tweets"] is None or len(self.state["timeline_tweets"]) == 0:
-                        if any("tweet" in task["name"] for task in self.tasks):
-                            logger.info("\n👀 READING TIMELINE")
-                            self.state["timeline_tweets"] = self.connection_manager.perform_action(
-                                connection_name="twitter",
-                                action_name="read-timeline",
-                                params=[]
-                            )
-
+                    # Fetch Shadow pool data
+                    if "shadow_pool_data" not in self.state or self.state["shadow_pool_data"] is None:
+                        logger.info("\n👀 FETCHING SHADOW POOL DATA")
+                        self.state["shadow_pool_data"] = self.fetch_shadow_pool_data()
+                        self.calculate_apy(self.state["shadow_pool_data"])
+                        
                     if "room_info" not in self.state or self.state["room_info"] is None:
                         if any("echochambers" in task["name"] for task in self.tasks):
                             logger.info("\n👀 READING ECHOCHAMBERS ROOM INFO")
@@ -195,6 +246,20 @@ class ZerePyAgent:
                                 action_name="get-room-info",
                                 params={}
                             )
+
+                    # TODO: RL prediction APR/APY model for Uniswap V3 pool
+                    # TODO: in this loop agent need to fetch market data in real time for APR/APY
+                    # TODO: scan all Uniswap V3 pools and get the best pool for APR/APY
+                    # TODO: heuristic rule predefine which action to take based on market conditions
+                    # TODO: llm context reasoning for uncertainty context
+                    # TODO: hysteresis filter stability
+                    # TODO: execute action
+                    # TODO: update state
+                    # TODO: save reasoning, excute action, update state in MongoDB
+                    # TODO: Terminal will fetch reasoning, excute action, update state from MongoDB
+                    # TODO: optional: user can buy agent shares from terminal this shares is value accure from agent's performance
+
+                    # TODO: https://api.shadow.so/mixed-pairs
 
                     # CHOOSE AN ACTION
                     # TODO: Add agentic action selection
